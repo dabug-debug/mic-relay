@@ -1,0 +1,13 @@
+{
+  "name": "scooter-mic-relay",
+  "version": "1.0.0",
+  "description": "ESP32 INMP441 live audio relay for Render",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "ws": "^8.18.0"
+  }
+}
