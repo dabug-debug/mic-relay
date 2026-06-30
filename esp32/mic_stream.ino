@@ -2,20 +2,42 @@
 #include <WebSocketsClient.h>
 #include "driver/i2s.h"
 
-const char* WIFI_SSID = "YOUR_WIFI_NAME";
-const char* WIFI_PASS = "YOUR_WIFI_PASSWORD";
+// =====================
+// Wi-Fi networks
+// =====================
+const char* WIFI_SSIDS[] = {
+  "Leno",
+  "DroiderV1",
+  "SUSDNET"
+};
 
+const char* WIFI_PASSWORDS[] = {
+  "LEENA2009",
+  "LEENA2009",
+  "ls1030"
+};
+
+const int WIFI_COUNT = 3;
+const unsigned long WIFI_TRY_TIMEOUT_MS = 5000; // fast fallback
+
+// =====================
+// Render WebSocket server
+// =====================
 // Example: your-app.onrender.com
 const char* WS_HOST = "YOUR_RENDER_HOSTNAME";
 const uint16_t WS_PORT = 443;
 const char* WS_PATH = "/ws?role=source";
 
+// =====================
+// INMP441 wiring
+// =====================
 #define I2S_BCLK   32
 #define I2S_LRCLK   25
 #define I2S_DIN     33
 
 static const i2s_port_t I2S_PORT = I2S_NUM_0;
 
+// Audio settings
 const int SAMPLE_RATE = 16000;
 const int FRAME_SAMPLES = 256;
 
@@ -23,16 +45,36 @@ WebSocketsClient webSocket;
 
 void setupWiFi() {
   WiFi.mode(WIFI_STA);
-  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  WiFi.setSleep(false);
+  WiFi.disconnect(true, true);
+  delay(200);
 
-  Serial.print("Connecting to Wi-Fi");
-  while (WiFi.status() != WL_CONNECTED) {
-    delay(500);
-    Serial.print(".");
+  for (int i = 0; i < WIFI_COUNT; i++) {
+    Serial.printf("\nTrying Wi-Fi %d: %s\n", i + 1, WIFI_SSIDS[i]);
+
+    WiFi.begin(WIFI_SSIDS[i], WIFI_PASSWORDS[i]);
+
+    unsigned long start = millis();
+    while (WiFi.status() != WL_CONNECTED &&
+           millis() - start < WIFI_TRY_TIMEOUT_MS) {
+      delay(100);
+    }
+
+    if (WiFi.status() == WL_CONNECTED) {
+      Serial.println("\nWi-Fi connected!");
+      Serial.print("SSID: ");
+      Serial.println(WiFi.SSID());
+      Serial.print("IP: ");
+      Serial.println(WiFi.localIP());
+      return;
+    }
+
+    Serial.println("Failed, moving to next network...");
+    WiFi.disconnect(true, true);
+    delay(100);
   }
-  Serial.println();
-  Serial.print("Wi-Fi connected, IP: ");
-  Serial.println(WiFi.localIP());
+
+  Serial.println("\nNo Wi-Fi networks available.");
 }
 
 void setupI2S() {
@@ -75,8 +117,7 @@ void setupI2S() {
 void setupWebSocket() {
   webSocket.beginSSL(WS_HOST, WS_PORT, WS_PATH);
 
-  // Easiest setup for a first test.
-  // For stricter security later, replace this with certificate validation.
+  // Easy first test setup. Later you can tighten security with certificate validation.
   webSocket.setInsecure();
 
   webSocket.setReconnectInterval(5000);
@@ -127,8 +168,6 @@ void loop() {
       const int samples = bytesRead / sizeof(int32_t);
 
       for (int i = 0; i < samples; i++) {
-        // INMP441 data arrives in the high bits of the 32-bit word.
-        // This converts it to signed 16-bit PCM for streaming.
         pcmSamples[i] = (int16_t)(rawSamples[i] >> 16);
       }
 
