@@ -1,0 +1,198 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Scooter Mic Listener</title>
+  <style>
+    body {
+      font-family: Arial, sans-serif;
+      margin: 0;
+      min-height: 100vh;
+      display: grid;
+      place-items: center;
+      background: #111;
+      color: #f2f2f2;
+    }
+    .card {
+      width: min(520px, calc(100vw - 32px));
+      background: #1b1b1b;
+      border: 1px solid #2a2a2a;
+      border-radius: 18px;
+      padding: 20px;
+      box-shadow: 0 12px 40px rgba(0,0,0,.35);
+    }
+    h1 { margin: 0 0 8px; font-size: 24px; }
+    p { margin: 8px 0; line-height: 1.4; color: #cfcfcf; }
+    button {
+      border: 0;
+      border-radius: 12px;
+      padding: 12px 16px;
+      font-size: 16px;
+      cursor: pointer;
+      margin-right: 10px;
+      margin-top: 10px;
+    }
+    #connect { background: #ffffff; color: #111; }
+    #stop { background: #3a3a3a; color: #fff; }
+    #status {
+      margin-top: 14px;
+      padding: 12px;
+      border-radius: 12px;
+      background: #262626;
+      color: #a8ffb0;
+      white-space: pre-wrap;
+      min-height: 44px;
+    }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <h1>Scooter Mic Listener</h1>
+    <p>Tap connect, then the page listens to the ESP32 microphone stream.</p>
+
+    <div>
+      <button id="connect">Connect</button>
+      <button id="stop" disabled>Disconnect</button>
+    </div>
+
+    <div id="status">Idle.</div>
+  </div>
+
+  <script>
+    let ws = null;
+    let audioCtx = null;
+    let processor = null;
+
+    const queue = [];
+    let currentChunk = null;
+    let currentIndex = 0;
+
+    const statusEl = document.getElementById('status');
+    const connectBtn = document.getElementById('connect');
+    const stopBtn = document.getElementById('stop');
+
+    function setStatus(msg) {
+      statusEl.textContent = msg;
+    }
+
+    function pushChunk(arrayBuffer) {
+      queue.push(new Int16Array(arrayBuffer));
+      if (queue.length > 80) {
+        queue.splice(0, queue.length - 80);
+      }
+    }
+
+    function popSample() {
+      while (!currentChunk || currentIndex >= currentChunk.length) {
+        currentChunk = queue.shift() || null;
+        currentIndex = 0;
+        if (!currentChunk) return 0;
+      }
+      return currentChunk[currentIndex++] / 32768;
+    }
+
+    async function startAudio() {
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      await audioCtx.resume();
+
+      processor = audioCtx.createScriptProcessor(1024, 1, 2);
+
+      processor.onaudioprocess = (e) => {
+        const outL = e.outputBuffer.getChannelData(0);
+        const outR = e.outputBuffer.getChannelData(1);
+
+        for (let i = 0; i < outL.length; i++) {
+          const s = popSample();
+          outL[i] = s;
+          outR[i] = s;
+        }
+      };
+
+      processor.connect(audioCtx.destination);
+    }
+
+    function stopAudio() {
+      try {
+        if (processor) processor.disconnect();
+      } catch (_) {}
+      processor = null;
+
+      try {
+        if (audioCtx) audioCtx.close();
+      } catch (_) {}
+      audioCtx = null;
+
+      queue.length = 0;
+      currentChunk = null;
+      currentIndex = 0;
+    }
+
+    async function connect() {
+      if (ws && ws.readyState === WebSocket.OPEN) return;
+
+      setStatus('Starting audio output...');
+
+      await startAudio();
+
+      const wsUrl =
+        `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?role=listener`;
+
+      ws = new WebSocket(wsUrl);
+      ws.binaryType = 'arraybuffer';
+
+      ws.onopen = () => {
+        setStatus('Connected. Waiting for the ESP32 stream...');
+        connectBtn.disabled = true;
+        stopBtn.disabled = false;
+      };
+
+      ws.onmessage = (ev) => {
+        if (typeof ev.data === 'string') {
+          try {
+            const msg = JSON.parse(ev.data);
+            if (msg.type === 'hello') {
+              if (msg.streaming) {
+                setStatus('Connected. Source is online.');
+              } else {
+                setStatus('Connected. Waiting for source...');
+              }
+            } else if (msg.type === 'status') {
+              setStatus(msg.streaming ? 'Source online.' : 'Source offline.');
+            }
+          } catch (_) {}
+          return;
+        }
+
+        pushChunk(ev.data);
+      };
+
+      ws.onclose = () => {
+        setStatus('Disconnected.');
+        connectBtn.disabled = false;
+        stopBtn.disabled = true;
+        stopAudio();
+        ws = null;
+      };
+
+      ws.onerror = () => {
+        setStatus('WebSocket error.');
+      };
+    }
+
+    function disconnect() {
+      if (ws) {
+        ws.close();
+        ws = null;
+      }
+      stopAudio();
+      connectBtn.disabled = false;
+      stopBtn.disabled = true;
+      setStatus('Disconnected.');
+    }
+
+    connectBtn.addEventListener('click', connect);
+    stopBtn.addEventListener('click', disconnect);
+  </script>
+</body>
+</html>
